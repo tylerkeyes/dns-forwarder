@@ -2,7 +2,10 @@ module github.com/tylerkeyes/dns-forwarder
 
 go 1.21.8
 
-require github.com/miekg/dns v1.1.58
+require (
+	github.com/joho/godotenv v1.5.1
+	github.com/miekg/dns v1.1.58
+)
 
 require (
 	golang.org/x/mod v0.14.0 // indirect

@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/miekg/dns"
 )
 
@@ -20,12 +23,16 @@ const (
 )
 
 var (
-	upServer   = flag.String("s", CLOUDFLARE_DNS, fmt.Sprintf("upstream server to connect to. <ip_addr:port>, default %v", CLOUDFLARE_DNS))
-	listenAddr = flag.String("a", ":53", "`address:port` to listen on. To listen on the loopback interface only, use `127.0.0.1:53`, to listen on any interface use `:53`.")
-	fakeAdd    = flag.String("fakead", "127.0.0.1", "an ip to send back for filtered domains")
-	upConn     = flag.String("up-conn", "udp", "upstream dns connection type <udp|tcp>")
-	listenConn = flag.String("listen-conn", "udp", "dns server connection type <udp|tcp>")
-	ttl        = flag.Int("ttl", absoluteMinTTL, "TTL for cached dns results, min of 60s, max of 1 day")
+	//upServer   = flag.String("s", CLOUDFLARE_DNS, fmt.Sprintf("upstream server to connect to. <ip_addr:port>, default %v", CLOUDFLARE_DNS))
+	//listenAddr = flag.String("a", ":53", "`address:port` to listen on. To listen on the loopback interface only, use `127.0.0.1:53`, to listen on any interface use `:53`.")
+	//upConn     = flag.String("up-conn", "udp", "upstream dns connection type <udp|tcp>")
+	//listenConn = flag.String("listen-conn", "udp", "dns server connection type <udp|tcp>")
+	//ttl        = flag.Int("ttl", absoluteMinTTL, "TTL for cached dns results, min of 60s, max of 1 day")
+	upServer   string
+	listenAddr string
+	upConn     string
+	listenConn string
+	ttl        int
 
 	flush     = make(chan struct{})
 	dataCache = make(map[string]dnsValue)
@@ -40,21 +47,42 @@ type dnsValue struct {
 }
 
 func main() {
-	flag.Parse()
-	if *ttl < absoluteMinTTL {
-		*ttl = absoluteMinTTL
-	} else if *ttl > absoluteMaxTTL {
-		*ttl = absoluteMaxTTL
+	err := godotenv.Load()
+	if err != nil {
+		log.Printf("error loading .env files: %v\n", err)
 	}
 
-	server := &dns.Server{Addr: *listenAddr, Net: *listenConn}
+	upServer = getEnv("UP_SERVER", CLOUDFLARE_DNS)
+	listenAddr = getEnv("LISTEN_ADDRESS", ":53")
+	upConn = getEnv("UPSTREAM_CONNECTION_TYPE", "udp")
+	listenConn = getEnv("LISTEN_CONNECTION_TYPE", "udp")
+	ttl, err = strconv.Atoi(getEnv("TTL", fmt.Sprintf("%v", absoluteMinTTL)))
+	if err != nil {
+		ttl = absoluteMinTTL // just set to minimumTTL
+	}
+
+	flag.Parse()
+	if ttl < absoluteMinTTL {
+		ttl = absoluteMinTTL
+	} else if ttl > absoluteMaxTTL {
+		ttl = absoluteMaxTTL
+	}
+
+	server := &dns.Server{Addr: listenAddr, Net: listenConn}
 	server.Handler = &dnsHandler{}
-	log.Printf("upstream dns: %v connection %v", *upServer, *upConn)
-	log.Printf("dns listen on: %v connection %v", *listenAddr, *listenConn)
-	go cleanCache(*ttl)
+	log.Printf("upstream dns: %v connection %v", upServer, upConn)
+	log.Printf("dns listen on: %v connection %v", listenAddr, listenConn)
+	go cleanCache(ttl)
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("fatal: failed to set udp|tcp listener %s\n", err.Error())
 	}
+}
+
+func getEnv(key string, defaultVal string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return defaultVal
 }
 
 func (*dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
@@ -69,7 +97,7 @@ func (*dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		address, ok := checkDomain(domain)
 		if ok {
 			msg.Answer = append(msg.Answer, &dns.A{
-				Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: uint32(*ttl)},
+				Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: uint32(ttl)},
 				A:   net.ParseIP(address),
 			})
 		}
@@ -100,7 +128,7 @@ func resolveDomain(domain string) (string, bool) {
 			dial := net.Dialer{
 				Timeout: time.Duration(10000) * time.Millisecond,
 			}
-			return dial.DialContext(ctx, *upConn, *upServer)
+			return dial.DialContext(ctx, upConn, upServer)
 		},
 	}
 
